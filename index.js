@@ -77,6 +77,8 @@ function readReqBody(req) {
 // ─── Local HTTP Server (内置登录页 + 旧版 callback + 进度页) ───────
 
 let localServer = null
+let localServerReady = false // true 表示端口可用：自己在监听，或同机另一实例在监听
+let localPortSharedByPeer = false // true 表示端口被同机其它 flash-cast-mcp 占用，复用它的页面服务
 let authResolve = null
 
 function openBrowser(url) {
@@ -89,7 +91,7 @@ function openBrowser(url) {
 }
 
 function ensureLocalServer() {
-  if (localServer) return
+  if (localServerReady) return
   localServer = createServer(async (req, res) => {
     const url = new URL(req.url, `http://127.0.0.1:${LOCAL_PORT}`)
 
@@ -221,6 +223,27 @@ function ensureLocalServer() {
     res.end('Not found')
   })
 
+  localServer.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE') {
+      // 端口被同机另一个 flash-cast-mcp 实例占用（多 Cursor 窗口 / 残留进程 / 旧进程未退出）。
+      // 直接复用对方提供的 /auth、/preview/:id、/progress/:id 页面，apiKey 通过
+      // ~/.flash-cast-mcp.json 跨进程共享，避免 Unhandled 'error' 事件把 stdio 进程打崩。
+      localServer = null
+      localServerReady = true
+      localPortSharedByPeer = true
+      console.error(
+        `[flash-cast-mcp] 127.0.0.1:${LOCAL_PORT} 已被同机另一个 MCP 实例占用，复用该实例提供的页面服务。`
+      )
+      return
+    }
+    console.error('[flash-cast-mcp] local server error:', err)
+    localServer = null
+    localServerReady = false
+  })
+  localServer.once('listening', () => {
+    localServerReady = true
+    localPortSharedByPeer = false
+  })
   localServer.listen(LOCAL_PORT, '127.0.0.1')
 }
 
@@ -231,6 +254,31 @@ async function startOAuthFlow() {
   const loginUrl = `http://127.0.0.1:${LOCAL_PORT}/auth`
 
   const promise = new Promise((resolve) => {
+    if (localPortSharedByPeer) {
+      // 登录由同机另一实例的 /auth 完成，apiKey 落到 ~/.flash-cast-mcp.json。
+      // 本进程轮询该文件，检测到新 apiKey 即视为登录成功。
+      const previousKey = apiKey
+      const deadline = Date.now() + 300_000
+      const timer = setInterval(() => {
+        try {
+          if (existsSync(CONFIG_PATH)) {
+            const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'))
+            if (cfg.apiKey && cfg.apiKey !== previousKey) {
+              apiKey = cfg.apiKey
+              clearInterval(timer)
+              resolve({ success: true })
+              return
+            }
+          }
+        } catch { /* ignore parse error, keep polling */ }
+        if (Date.now() >= deadline) {
+          clearInterval(timer)
+          resolve({ success: false, timeout: true })
+        }
+      }, 1500)
+      return
+    }
+
     authResolve = resolve
     setTimeout(() => { if (authResolve === resolve) { resolve({ success: false, timeout: true }); authResolve = null } }, 300_000)
   })

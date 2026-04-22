@@ -1,6 +1,6 @@
 {
   "name": "flash-cast-mcp",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Flash Cast MCP Server - AI video production via Model Context Protocol",
   "type": "module",
   "main": "index.js",
