@@ -24,9 +24,7 @@
   "files": [
     "index.js",
     "README.md",
-    "LICENSE",
-    "examples/readme-poster-demo1.svg",
-    "examples/readme-poster-demo2.svg"
+    "LICENSE"
   ],
   "repository": {
     "type": "git",
