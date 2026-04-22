@@ -1,0 +1,40 @@
+{
+  "name": "flash-cast-mcp",
+  "version": "1.4.0",
+  "description": "Flash Cast MCP Server - AI video production via Model Context Protocol",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "flash-cast-mcp": "index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "smoke:local": "FLASH_CAST_API_BASE=http://localhost:8080 node scripts/smoke-local-auth.mjs",
+    "smoke:prod": "curl -sS -m 10 https://share.skyxhome.com/api/health"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "video",
+    "ai",
+    "tts",
+    "flash-cast"
+  ],
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flash-cast/flash-cast-mcp.git"
+  },
+  "homepage": "https://share.skyxhome.com",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.4"
+  }
+}

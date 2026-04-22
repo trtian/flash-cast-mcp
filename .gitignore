@@ -1,0 +1,14 @@
+node_modules/
+*.log
+.DS_Store
+.env
+.env.*
+*.local
+
+# MCP local state
+.flash-cast-mcp.json
+
+# Editor
+.idea/
+.vscode/
+*.swp
