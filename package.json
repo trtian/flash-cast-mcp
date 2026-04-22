@@ -24,11 +24,13 @@
   "files": [
     "index.js",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "examples/readme-poster-demo1.svg",
+    "examples/readme-poster-demo2.svg"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/flash-cast/flash-cast-mcp.git"
+    "url": "https://github.com/trtian/flash-cast-mcp.git"
   },
   "homepage": "https://share.skyxhome.com",
   "engines": {
