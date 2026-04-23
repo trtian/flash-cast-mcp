@@ -202,14 +202,17 @@ npx -y flash-cast-mcp
 | `get_template_detail` | 查看某个模板的设计规范 | — |
 | `create_project` | 新建一个视频项目 | — |
 | `upload_html` | 上传 HTML（AI 自己写的），返回分页摘要 | — |
+| `upload_material` | 上传图片/视频素材到 OSS（视频自动转码 H.264） | — |
+| `get_material_guidelines` | 查看素材时长、pageMarks 与嵌入视频的约定 | — |
 | `list_voices` | 枚举可用 TTS 音色 + 标签 | — |
-| `configure_voice_and_script` | 设置配音 + 口播文案 + **pageMarks 声画同步** | — |
+| `configure_voice_and_script` | 配音 + 口播文案 + **pageMarks** + **多人配音** + **page_holds** | — |
 | `get_render_preview` | 渲染前只读预览（强制人工确认） | — |
 | `render_video` | 触发 TTS + 浏览器级录屏（约 2–10 min） | <svg width="15" height="15" style="vertical-align:-0.2em;color:#16a34a"><use href="#fc-check"/></svg> |
+| `re_render_video` | 修改内容后强制重新渲染（会扣额度） | <svg width="15" height="15" style="vertical-align:-0.2em;color:#16a34a"><use href="#fc-check"/></svg> |
 | `get_render_status` | 查进度 / 拿下载链接 | — |
 | `analyze_douyin_video` | 抖音爆款拆解（ASR + 结构分析） | <svg width="15" height="15" style="vertical-align:-0.2em;color:#16a34a"><use href="#fc-check"/></svg> |
 
-> 「耗算力」= 后端消耗 TTS / 渲染 / ASR / LLM 资源，非会员每账户 1 次免费完整试用。
+> 「耗算力」= 后端消耗 TTS / 渲染 / ASR / LLM 资源，**新用户注册即送 Pro 会员 30 天试用（限前 100 名）**，试用期享 150 次渲染额度。
 
 ## <svg width="20" height="20" style="vertical-align:-0.25em;color:currentColor" aria-hidden="true"><use href="#fc-cycle"/></svg> 典型工作流
 
@@ -217,23 +220,28 @@ npx -y flash-cast-mcp
   ↓
 create_project
   ↓
-upload_html               ← AI 把它刚写的 HTML 上传
+upload_material            ← 可选：上传图片/视频素材（视频自动转码 H.264）
+  ↓
+upload_html               ← AI 把它刚写的 HTML 上传（可内嵌素材 URL）
   ↓
 list_voices               ← AI 按内容调性自动挑音色
   ↓
-configure_voice_and_script ← <svg width="14" height="14" style="vertical-align:-0.15em;color:#ca8a04" aria-hidden="true"><use href="#fc-warn"/></svg> AI 自行切分 page_marks（声画同步）
+configure_voice_and_script ← <svg width="14" height="14" style="vertical-align:-0.15em;color:#ca8a04" aria-hidden="true"><use href="#fc-warn"/></svg> page_marks + voice_assignments（多人配音）+ page_holds
   ↓
 get_render_preview         ← <svg width="14" height="14" style="vertical-align:-0.15em;color:#ca8a04" aria-hidden="true"><use href="#fc-warn"/></svg> 用户浏览器核对，必须确认
   ↓
 render_video (user_confirmed_content: true)
   ↓
 get_render_status          ← 轮询到 COMPLETED → 下载链接
+  ↓
+re_render_video            ← 可选：修改内容后重新渲染
 </pre>
 
-两条关键护栏：
+三条关键护栏：
 
 - **AI 自主分页**：多页 HTML 的 `page_marks`（口播字符区间 → 页）由对话中的 AI 自己决定断点，不是服务端黑盒。优先在标点后切换；
-- **渲染前强制预览**：后端会拒绝未经 `get_render_preview` 确认的渲染请求（返回 `preview_not_confirmed`），避免浪费算力。
+- **渲染前强制预览**：后端会拒绝未经 `get_render_preview` 确认的渲染请求（返回 `preview_not_confirmed`），避免浪费算力；
+- **素材自动转码**：上传的视频素材在后端自动转码为 H.264 MP4，确保渲染引擎（Google Chrome headless）兼容。
 
 ## <svg width="20" height="20" style="vertical-align:-0.25em;color:currentColor" aria-hidden="true"><use href="#fc-pen"/></svg> HTML 规范（写给前端同学 / 想贡献模板的你）
 
@@ -280,11 +288,23 @@ MCP 转发到 FLASH_CAST_API_BASE/api/auth/*
 
 | 类型 | 能力 |
 |---|---|
-| 订阅会员 | 所有工具无限使用 |
+| <svg width="15" height="15" style="vertical-align:-0.2em;color:#7c3aed" aria-hidden="true"><use href="#fc-cake"/></svg> **新用户试用** | **注册即送 Pro 会员 30 天**（限前 100 名），含 150 次渲染额度 |
+| 订阅会员 | Starter（30 次/月） / Pro（150 次/月） / Business（500 次/月） |
 | 付费用户 | 按渲染扣费 |
-| 免费试用 | 每账户 1 次完整流程体验 |
 
 触发付费时，工具结果会带 `pricingUrl`，AI 可以直接发给用户。
+
+## <svg width="20" height="20" style="vertical-align:-0.25em;color:currentColor" aria-hidden="true"><use href="#fc-bolt"/></svg> 最近更新
+
+**v1.5** — 2026-04-23
+
+- <svg width="15" height="15" style="vertical-align:-0.2em;color:#16a34a" aria-hidden="true"><use href="#fc-check"/></svg> **嵌入视频**：HTML 里的 `<video>` 标签现在能在成片中正常播放（渲染引擎切换到 Google Chrome，支持 H.264）
+- <svg width="15" height="15" style="vertical-align:-0.2em;color:#16a34a" aria-hidden="true"><use href="#fc-check"/></svg> **素材上传 + 自动转码**：`upload_material` 上传图片/视频，视频自动转码为 H.264 MP4，确保渲染兼容
+- <svg width="15" height="15" style="vertical-align:-0.2em;color:#16a34a" aria-hidden="true"><use href="#fc-check"/></svg> **多人配音**：`voice_assignments` 支持每页指定不同音色，实现对话 / 多角色口播
+- <svg width="15" height="15" style="vertical-align:-0.2em;color:#16a34a" aria-hidden="true"><use href="#fc-check"/></svg> **画面停留（page_holds）**：TTS 段后可插入静音停留或旁白，用于视频展示、留白节奏
+- <svg width="15" height="15" style="vertical-align:-0.2em;color:#16a34a" aria-hidden="true"><use href="#fc-check"/></svg> **重新渲染**：`re_render_video` 修改内容后可重新渲染，无需新建项目
+- <svg width="15" height="15" style="vertical-align:-0.2em;color:#7c3aed" aria-hidden="true"><use href="#fc-cake"/></svg> **注册送 Pro**：前 100 名注册用户自动获赠 Pro 会员 30 天试用（150 次渲染额度）
+- <svg width="15" height="15" style="vertical-align:-0.2em;color:#16a34a" aria-hidden="true"><use href="#fc-check"/></svg> **成品永久链接**：渲染完成的视频下载链接不再过期
 
 ## <svg width="20" height="20" style="vertical-align:-0.25em;color:currentColor" aria-hidden="true"><use href="#fc-hands"/></svg> 贡献
 

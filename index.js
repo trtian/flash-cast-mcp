@@ -61,6 +61,34 @@ async function api(method, path, body) {
   return payload?.data ?? payload
 }
 
+/** multipart/form-data，用于素材上传 */
+async function apiMultipart(path, formData) {
+  const url = `${API_BASE}${path}`
+  const headers = {}
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+  const resp = await fetch(url, { method: 'POST', headers, body: formData })
+  const payload = await resp.json().catch(() => null)
+  if (!resp.ok) {
+    const msg = payload?.msg || payload?.message || `${resp.status} ${resp.statusText}`
+    throw new Error(msg)
+  }
+  if (payload?.code !== undefined && payload.code !== 0) {
+    throw new Error(payload.msg || 'Request failed')
+  }
+  return payload?.data ?? payload
+}
+
+function guessMimeFromFilename(name) {
+  const n = String(name || '').toLowerCase()
+  if (n.endsWith('.png')) return 'image/png'
+  if (n.endsWith('.jpg') || n.endsWith('.jpeg')) return 'image/jpeg'
+  if (n.endsWith('.webp')) return 'image/webp'
+  if (n.endsWith('.mp4')) return 'video/mp4'
+  if (n.endsWith('.webm')) return 'video/webm'
+  if (n.endsWith('.mov')) return 'video/quicktime'
+  return 'application/octet-stream'
+}
+
 function text(obj) {
   return { content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] }
 }
@@ -337,6 +365,25 @@ const TOOLS = [
     },
   },
   {
+    name: 'upload_material',
+    description:
+      '上传图片或视频到 OSS，返回 ossKey、signedUrl（默认可为公网直链，字段名不变）、时长与「时间轴/原声」提示。视频在后端会转码为 H.264 MP4（便于录屏解码），写入 HTML 时 src 用返回的 URL；不写入 FFmpeg overlay。视频建议 5–15 秒；时长硬上限 10 分钟，单文件上限见 get_material_guidelines。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: '项目 ID' },
+        media_file: { type: 'string', description: '本地素材文件绝对或相对路径' },
+      },
+      required: ['project_id', 'media_file'],
+    },
+  },
+  {
+    name: 'get_material_guidelines',
+    description:
+      '读取平台对嵌入 HTML 的素材时长、pageMarks 与「视频原声」的约定说明（无需上传）。生成 HTML / 划分 pageMarks 前应先调用。',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
     name: 'list_voices',
     description:
       '返回所有可用配音音色，含 id、name、gender、trait（特质描述）、description、tags、suggestedFor 等元数据。AI 据此自动匹配最适合内容调性的音色。',
@@ -345,7 +392,7 @@ const TOOLS = [
   {
     name: 'configure_voice_and_script',
     description:
-      '设置项目的配音配置、解说文案与声画同步 pageMarks。多页 HTML 口播渲染前必须由你（当前对话中的 AI）自行划分 page_marks：根据 upload_html 返回的幻灯片页数与每页文本摘要，把 script 切成若干左闭右开区间 [start,end)，按时间顺序覆盖全文（0 到 script 的字符长度）、互不重叠不遗漏；每个区间标注 pageIdx（0..页数-1）表示该段口播时画面应停在哪一页。优先在句号、逗号等标点后换页，避免在「始终」「因此」等双字词或固定搭配中间切断——断句与语义是否通顺由调用方负责，平台不提供服务端自动分页也不保证词边界。渲染前须让用户在本机预览页核对，请调用 get_render_preview。',
+      '设置项目的配音配置、解说文案与声画同步 pageMarks；可选 page_holds：在某段 TTS 结束后插入「画面停留 + 可选旁白或静音」。若某项含可读 narration：对该文案单独 TTS，音长以实测为准（用于解说演示）；若无 narration 或仅空白：用 durationMs 纯静音停留。afterChar 必须等于某段口播结束下标（charEnd）；纯静音时 durationMs 建议 ≥ 嵌入视频时长（200~120000）；整段 TTS+holds 粗估上限 10 分钟。多页口播前须自行划分 page_marks。渲染前须让用户在本机预览页核对，请调用 get_render_preview。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -384,6 +431,23 @@ const TOOLS = [
           items: {
             type: 'object',
             properties: { start: { type: 'integer' }, end: { type: 'integer' }, speed: { type: 'number' } },
+          },
+        },
+        page_holds: {
+          type: 'array',
+          description:
+            '可选：TTS 段后画面停留；可读 narration 则旁白 TTS，否则 durationMs 静音。afterChar=某口播段结束下标；与 get_material_guidelines 同读。',
+          items: {
+            type: 'object',
+            properties: {
+              afterChar: { type: 'integer', description: '等于该段 script 子区间结束下标（charEnd）' },
+              durationMs: { type: 'integer', description: '无旁白时为静音毫秒数；有旁白时仍须合法（占位），实际音长由 TTS 决定' },
+              pageIdx: { type: 'integer', description: '停留期间显示的幻灯片索引' },
+              narration: { type: 'string', description: '可选：本段解说文案（与主 script 独立），有则走 TTS' },
+              voiceSpeed: { type: 'number', description: '可选：本段 TTS 语速，缺省用全局 voice_speed' },
+              voiceId: { type: 'string', description: '可选：本段音色，缺省用该页 voice_assignments 或 voice_model' },
+            },
+            required: ['afterChar', 'durationMs', 'pageIdx'],
           },
         },
       },
@@ -523,6 +587,26 @@ async function handleTool(name, args) {
       return text(await api('POST', `/api/mcp/cast/projects/${args.project_id}/upload-html`, { htmlContent }))
     }
 
+    case 'upload_material': {
+      const fs = await import('node:fs/promises')
+      const mediaPath = args.media_file
+      if (!mediaPath || !String(mediaPath).trim()) {
+        throw new Error('media_file 必填：本地图片（jpeg/png/webp）或视频（mp4/webm/mov）路径')
+      }
+      const buf = await fs.readFile(mediaPath)
+      const base = String(mediaPath).split(/[/\\\\]/).pop()
+      const mime = guessMimeFromFilename(base)
+      const blob = new Blob([buf], { type: mime })
+      const fd = new FormData()
+      fd.append('file', blob, base)
+      return text(
+        await apiMultipart(`/api/mcp/cast/projects/${args.project_id}/materials/upload`, fd)
+      )
+    }
+
+    case 'get_material_guidelines':
+      return text(await api('GET', '/api/mcp/cast/material-guidelines'))
+
     case 'list_voices':
       return text(await api('GET', '/api/mcp/cast/voices'))
 
@@ -534,6 +618,7 @@ async function handleTool(name, args) {
         speedMarks: args.speed_marks,
         voiceAssignments: args.voice_assignments,
         pageMarks: args.page_marks,
+        pageHolds: args.page_holds,
       }
       return text(await api('PUT', `/api/mcp/cast/projects/${args.project_id}`, body))
     }
@@ -822,69 +907,208 @@ function previewHtml(projectId, key) {
   const apiJson = JSON.stringify(API_BASE)
   return `<!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Flash Cast - 渲染前预览（只读）</title>
+<title>Flash Cast - 渲染预览</title>
 <style>
-*{box-sizing:border-box;margin:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;background:#0c0c0e;color:#e0e0e6;min-height:100vh;display:flex;flex-direction:column}
-.top{padding:14px 20px;border-bottom:1px solid #222228;background:#151518}
-.top h1{font-size:15px;font-weight:600;color:#f0f0f0}
-.top p{font-size:11px;color:#6b6b76;margin-top:4px}
-.banner{padding:10px 20px;background:#1a1810;border-bottom:1px solid #2a2820;font-size:12px;color:#b8a88c}
-.grid{flex:1;display:grid;grid-template-columns:minmax(280px,38%) 1fr;min-height:0}
-.panel{border-right:1px solid #222228;display:flex;flex-direction:column;min-height:0;background:#111114}
-.panel h2{font-size:11px;font-weight:600;color:#7a7a86;text-transform:uppercase;letter-spacing:.06em;padding:10px 14px;border-bottom:1px solid #1e1e24}
-.meta{padding:12px 14px;font-size:12px;color:#9a9aa6;line-height:1.7;border-bottom:1px solid #1e1e24}
-.meta code{color:#c0c0cc}
-.ta{flex:1;width:100%;padding:12px;border:none;background:#0c0c0e;color:#e0e0e6;font-size:13px;line-height:1.55;resize:none;outline:none;font-family:ui-monospace,Menlo,monospace}
-.pre{flex:1;margin:0;padding:12px;overflow:auto;font-size:11px;line-height:1.45;color:#9a9aa6;background:#0c0c0e;border:none;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace}
-.slides{padding:8px 14px 12px;font-size:12px;color:#8a8a96;border-bottom:1px solid #1e1e24;max-height:120px;overflow:auto}
-.view{position:relative;min-height:0;background:#000;display:flex;flex-direction:column}
-.view h2{font-size:11px;font-weight:600;color:#7a7a86;padding:8px 12px;border-bottom:1px solid #1e1e24}
-iframe{flex:1;width:100%;border:none;background:#000}
-.err{padding:40px 20px;text-align:center;color:#e5534b;font-size:13px}
+:root{--bg:#09090b;--bg2:#111113;--bg3:#18181b;--border:#27272a;--border2:#3f3f46;--fg:#fafafa;--fg2:#a1a1aa;--fg3:#71717a;--accent:#6d28d9;--accent2:#7c3aed;--accent-glow:rgba(124,58,237,.12);--warn:#ca8a04;--warn-bg:rgba(202,138,4,.08)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--fg);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+.hd{display:flex;align-items:center;gap:10px;padding:10px 20px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0}
+.hd-icon{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),#a855f7);display:grid;place-items:center;font-size:12px;color:#fff;flex-shrink:0}
+.hd-text h1{font-size:13px;font-weight:600}
+.hd-text p{font-size:10px;color:var(--fg3);margin-top:1px}
+.hd-badge{margin-left:auto;font-size:9px;padding:2px 8px;border-radius:999px;background:var(--warn-bg);color:var(--warn);border:1px solid rgba(202,138,4,.18);white-space:nowrap}
+
+.main{flex:1;display:flex;min-height:0;overflow:hidden}
+
+/* ── left panel ── */
+.panel{width:320px;flex-shrink:0;display:flex;flex-direction:column;background:var(--bg2);border-right:1px solid var(--border);overflow-y:auto;overflow-x:hidden}
+.sec{border-bottom:1px solid var(--border)}
+.sec-hd{display:flex;align-items:center;gap:6px;padding:7px 14px;cursor:pointer;user-select:none;font-size:10px;font-weight:700;color:var(--fg3);text-transform:uppercase;letter-spacing:.05em}
+.sec-hd:hover{color:var(--fg2)}
+.sec-hd .arr{font-size:8px;transition:transform .15s}
+.sec.collapsed .sec-body{display:none}
+.sec.collapsed .arr{transform:rotate(-90deg)}
+.mg{display:grid;grid-template-columns:56px 1fr;gap:2px 8px;padding:8px 14px;font-size:11px;line-height:1.55}
+.mg .l{color:var(--fg3)}
+.mg .v{color:var(--fg2);font-family:ui-monospace,Menlo,monospace;font-size:10px;overflow:hidden;text-overflow:ellipsis}
+.ta{width:100%;min-height:100px;max-height:220px;padding:8px 14px;border:none;background:var(--bg);color:var(--fg);font-size:11px;line-height:1.55;resize:vertical;outline:none;font-family:ui-monospace,Menlo,monospace}
+.sl{padding:6px 14px;font-size:11px;color:var(--fg2);max-height:160px;overflow-y:auto}
+.sl .si{padding:3px 0;border-bottom:1px solid var(--border)}
+.sl .si b{color:var(--accent2);font-weight:600;margin-right:3px}
+.pre{margin:0;padding:8px 14px;overflow:auto;max-height:140px;font-size:10px;line-height:1.45;color:var(--fg3);background:var(--bg);white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,Menlo,monospace}
+
+/* ── right: viewport ── */
+.vp{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+.tb{display:flex;align-items:center;gap:5px;padding:5px 10px;background:var(--bg3);border-bottom:1px solid var(--border);flex-shrink:0}
+.tb .lbl{font-size:10px;color:var(--fg3);margin-right:auto}
+.btn{min-width:28px;height:24px;padding:0 6px;border:1px solid var(--border2);border-radius:5px;background:var(--bg2);color:var(--fg2);font-size:12px;cursor:pointer;display:grid;place-items:center;transition:all .1s;line-height:1;font-family:inherit}
+.btn:hover{background:var(--bg3);border-color:var(--fg3)}
+.btn:active,.btn.on{background:var(--accent-glow);border-color:var(--accent);color:var(--accent2)}
+.tag{font-size:10px;color:var(--fg3);min-width:42px;text-align:center;font-variant-numeric:tabular-nums}
+.sp{width:1px;height:16px;background:var(--border2)}
+
+.canvas{flex:1;position:relative;overflow:hidden;background:#000}
+.canvas iframe{position:absolute;top:0;left:0;border:none;background:#111;transform-origin:0 0}
+
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--fg3);background:rgba(0,0,0,.82);padding:5px 14px;border-radius:6px;pointer-events:none;opacity:0;transition:opacity .25s;backdrop-filter:blur(4px)}
+.toast.show{opacity:1}
+.err{padding:40px 20px;text-align:center;color:#ef4444;font-size:13px}
+
+@media(max-width:760px){
+  .main{flex-direction:column}
+  .panel{width:100%;max-height:35vh;border-right:none;border-bottom:1px solid var(--border)}
+}
 </style></head>
 <body>
-<div class="top"><h1>渲染前预览（只读）</h1><p>请核对左侧文案与下方画面；确认无误后在 AI 对话中说明，并由 Agent 调用 render_video 且 user_confirmed_content: true</p></div>
-<div class="banner">本页不可编辑；修改请回到 Agent 重新上传 HTML 或更新 configure_voice_and_script。</div>
-<div class="grid">
-  <div class="panel" id="leftCol">
-    <h2>项目与配音</h2>
-    <div class="meta" id="meta"></div>
-    <h2>配音全文</h2>
-    <textarea class="ta" id="scriptTa" readonly spellcheck="false"></textarea>
-    <h2>每页摘要</h2>
-    <div class="slides" id="slides"></div>
-    <h2>pageMarks（JSON）</h2>
-    <pre class="pre" id="marks"></pre>
+<div class="hd">
+  <div class="hd-icon">▶</div>
+  <div class="hd-text"><h1>Flash Cast · 渲染预览</h1><p>核对文案与画面，确认后告诉 Agent</p></div>
+  <div class="hd-badge">只读</div>
+</div>
+<div class="main">
+  <div class="panel">
+    <div class="sec" id="s1"><div class="sec-hd" data-t="s1"><span class="arr">▼</span>项目信息</div><div class="sec-body"><div class="mg" id="meta"></div></div></div>
+    <div class="sec" id="s2"><div class="sec-hd" data-t="s2"><span class="arr">▼</span>配音全文</div><div class="sec-body"><textarea class="ta" id="scriptTa" readonly spellcheck="false"></textarea></div></div>
+    <div class="sec" id="s3"><div class="sec-hd" data-t="s3"><span class="arr">▼</span>每页摘要</div><div class="sec-body"><div class="sl" id="slides"></div></div></div>
+    <div class="sec collapsed" id="s4"><div class="sec-hd" data-t="s4"><span class="arr">▼</span>pageMarks</div><div class="sec-body"><pre class="pre" id="marks"></pre></div></div>
   </div>
-  <div class="view">
-    <h2>HTML 画面预览</h2>
-    <iframe id="frame" title="html preview" sandbox="allow-scripts allow-same-origin"></iframe>
+  <div class="vp">
+    <div class="tb">
+      <span class="lbl" id="arLabel">16:9</span>
+      <button class="btn" id="bPrev" title="上一页 ←">◀</button>
+      <span class="tag" id="pgInfo">—</span>
+      <button class="btn" id="bNext" title="下一页 →">▶</button>
+      <span class="sp"></span>
+      <button class="btn" id="bOut" title="缩小">−</button>
+      <span class="tag" id="zV">100%</span>
+      <button class="btn" id="bIn" title="放大">+</button>
+      <button class="btn" id="bFit" title="适应窗口">⊡</button>
+    </div>
+    <div class="canvas" id="cvs">
+      <iframe id="fr"></iframe>
+    </div>
   </div>
 </div>
+<div class="toast" id="toast"></div>
 <div id="err" class="err" style="display:none"></div>
 <script>
 const API=${apiJson},PID=${JSON.stringify(String(projectId))},KEY=${keyJson};
-async function load(){
-  const errEl=document.getElementById('err');
+const ASPECTS=[[1920,1080,'16:9'],[1080,1920,'9:16'],[1080,1080,'1:1'],[1440,1080,'4:3']];
+
+/* collapse */
+document.querySelectorAll('.sec-hd').forEach(function(el){
+  el.addEventListener('click',function(){document.getElementById(this.dataset.t).classList.toggle('collapsed')});
+});
+
+/* state */
+var fr=document.getElementById('fr'),cvs=document.getElementById('cvs');
+var aspIdx=0,aspW=1920,aspH=1080;
+var zoom=100,curPage=0,totalPages=0;
+
+/* ── zoom ── */
+function applyView(){
+  var s=zoom/100;
+  fr.style.width=aspW+'px';
+  fr.style.height=aspH+'px';
+  fr.style.transform='scale('+s+')';
+  var rw=aspW*s,rh=aspH*s;
+  var cw=cvs.clientWidth,ch=cvs.clientHeight;
+  fr.style.left=Math.max(0,(cw-rw)/2)+'px';
+  fr.style.top=Math.max(0,(ch-rh)/2)+'px';
+  document.getElementById('zV').textContent=zoom+'%';
+}
+function fit(){
+  var cw=cvs.clientWidth,ch=cvs.clientHeight;
+  if(cw<10||ch<10)return;
+  zoom=Math.max(10,Math.min(300,Math.floor(Math.min(cw/aspW,ch/aspH)*100)));
+  applyView();
+}
+function zIn(){zoom=Math.min(zoom+10,300);applyView()}
+function zOut(){zoom=Math.max(zoom-10,10);applyView()}
+document.getElementById('bIn').onclick=zIn;
+document.getElementById('bOut').onclick=zOut;
+document.getElementById('bFit').onclick=fit;
+
+/* ── pages ── */
+function updPg(){document.getElementById('pgInfo').textContent=totalPages>0?(curPage+1)+' / '+totalPages:'—'}
+function goPage(i){
+  if(totalPages<=0)return;
+  curPage=Math.max(0,Math.min(totalPages-1,i));
   try{
-    const h={};if(KEY)h['Authorization']='Bearer '+KEY;
-    const r=await fetch(API+'/api/mcp/cast/projects/'+PID+'/preview-pack',{headers:h});
-    const j=await r.json();
-    const d=j.data||j;
-    if(j.code!==undefined&&j.code!==0){errEl.style.display='block';errEl.textContent=j.msg||'加载失败';return;}
-    document.getElementById('meta').innerHTML='<div>标题：<code>'+esc(d.title||'')+'</code></div><div>项目 ID：<code>'+esc(String(d.projectId))+'</code></div><div>页数：'+(d.slideCount||0)+' · 音色：<code>'+esc(d.voiceModel||'')+'</code> · 语速：'+(d.voiceSpeed!=null?d.voiceSpeed:1)+'</div><div>比例：<code>'+esc(d.aspectRatio||'16:9')+'</code></div>';
+    var w=fr.contentWindow;
+    if(w.__fc&&typeof w.__fc.showPage==='function'){w.__fc.showPage(curPage)}
+    else if(typeof w.showSlide==='function'){w.showSlide(curPage)}
+    else{
+      var ss=fr.contentDocument.querySelectorAll('.slide,[data-fc-page]');
+      ss.forEach(function(el,k){el.style.display=k===curPage?'':'none';if(k===curPage)el.classList.add('active');else el.classList.remove('active')});
+    }
+  }catch(e){}
+  updPg();
+}
+document.getElementById('bPrev').onclick=function(){goPage(curPage-1)};
+document.getElementById('bNext').onclick=function(){goPage(curPage+1)};
+
+/* ── keyboard ── */
+var _ht;
+function tip(m){var t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(_ht);_ht=setTimeout(function(){t.classList.remove('show')},1500)}
+document.addEventListener('keydown',function(e){
+  if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT')return;
+  switch(e.key){
+    case'ArrowLeft':case'a':case'A':case'PageUp':e.preventDefault();goPage(curPage-1);tip('← 第 '+(curPage+1)+' 页');break;
+    case'ArrowRight':case'd':case'D':case'PageDown':e.preventDefault();goPage(curPage+1);tip('→ 第 '+(curPage+1)+' 页');break;
+    case'+':case'=':e.preventDefault();zIn();tip(zoom+'%');break;
+    case'-':case'_':e.preventDefault();zOut();tip(zoom+'%');break;
+    case'0':e.preventDefault();fit();tip('适应 '+zoom+'%');break;
+  }
+});
+
+/* ── resize ── */
+var _rt;
+window.addEventListener('resize',function(){clearTimeout(_rt);_rt=setTimeout(fit,120)});
+
+/* ── load ── */
+async function load(){
+  var errEl=document.getElementById('err');
+  try{
+    var h={};if(KEY)h['Authorization']='Bearer '+KEY;
+    var r=await fetch(API+'/api/mcp/cast/projects/'+PID+'/preview-pack',{headers:h});
+    var j=await r.json();var d=j.data||j;
+    if(j.code!==undefined&&j.code!==0){errEl.style.display='block';errEl.textContent=j.msg||'加载失败';return}
+    document.getElementById('meta').innerHTML=
+      '<span class=l>标题</span><span class=v>'+esc(d.title||'—')+'</span>'+
+      '<span class=l>ID</span><span class=v>'+esc(String(d.projectId))+'</span>'+
+      '<span class=l>页数</span><span class=v>'+(d.slideCount||0)+'</span>'+
+      '<span class=l>音色</span><span class=v>'+esc(d.voiceModel||'—')+'</span>'+
+      '<span class=l>语速</span><span class=v>'+(d.voiceSpeed!=null?d.voiceSpeed:1)+'</span>'+
+      '<span class=l>比例</span><span class=v>'+esc(d.aspectRatio||'16:9')+'</span>';
     document.getElementById('scriptTa').value=d.script||'';
-    const st=d.slideTexts||[];
-    document.getElementById('slides').innerHTML=st.map((t,i)=>'<div style="margin-bottom:6px"><b>P'+i+'</b> '+esc(t)+'</div>').join('')||'<i>无</i>';
-    document.getElementById('marks').textContent=d.pageMarks!=null?JSON.stringify(d.pageMarks,null,2):'（尚未写入：请在 configure_voice_and_script 中传入 page_marks）';
-    const html=d.html||'';
-    const fr=document.getElementById('frame');
-    fr.srcdoc=html;
-  }catch(e){errEl.style.display='block';errEl.textContent=e.message||'加载异常';}
+    var st=d.slideTexts||[];
+    document.getElementById('slides').innerHTML=st.map(function(t,i){return'<div class=si><b>P'+(i+1)+'</b>'+esc(t)+'</div>'}).join('')||'<i>无</i>';
+    document.getElementById('marks').textContent=d.pageMarks!=null?JSON.stringify(d.pageMarks,null,2):'（尚未写入）';
+
+    totalPages=d.slideCount||0;updPg();
+
+    var arCode=(d.aspectRatio||'16:9').trim();
+    for(var i=0;i<ASPECTS.length;i++){if(ASPECTS[i][2]===arCode){aspIdx=i;break}}
+    aspW=ASPECTS[aspIdx][0];aspH=ASPECTS[aspIdx][1];
+    document.getElementById('arLabel').textContent=ASPECTS[aspIdx][2];
+
+    fr.srcdoc=d.html||'';
+    fr.onload=function(){
+      try{
+        var w=fr.contentWindow;
+        if(w.__fc){totalPages=w.__fc.count||totalPages}
+        else{var ss=fr.contentDocument.querySelectorAll('.slide,[data-fc-page],section.slide');if(ss.length)totalPages=ss.length}
+      }catch(e){}
+      updPg();
+      setTimeout(fit,60);
+    };
+  }catch(e){errEl.style.display='block';errEl.textContent=e.message||'加载异常'}
 }
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 load();
+setTimeout(function(){tip('← → 翻页 · +/- 缩放 · 0 适应')},600);
 </script>
 </body></html>`
 }
@@ -1002,7 +1226,7 @@ poll();
 // ─── Server setup ──────────────────────────────────────────────────
 
 const server = new Server(
-  { name: 'flash-cast-mcp', version: '1.3.0' },
+  { name: 'flash-cast-mcp', version: '1.5.0' },
   { capabilities: { tools: {} } },
 )
 

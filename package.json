@@ -1,6 +1,6 @@
 {
   "name": "flash-cast-mcp",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Flash Cast MCP Server - AI video production via Model Context Protocol",
   "type": "module",
   "main": "index.js",
@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node index.js",
     "smoke:local": "FLASH_CAST_API_BASE=http://localhost:8080 node scripts/smoke-local-auth.mjs",
+    "smoke:mcp:local": "node scripts/mcp-smoke-local.mjs",
     "smoke:prod": "curl -sS -m 10 https://share.skyxhome.com/api/health"
   },
   "keywords": [
